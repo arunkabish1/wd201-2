@@ -26,6 +26,8 @@ app.set("view engine", "ejs");
 
 app.use(session({
   secret: "my-super-secret-key-15261562217281726",
+  resave: false, // add this line
+  saveUninitialized: false, // add this line
   cookie: {
     maxAge: 24 * 60 * 60 * 1000,
   },
@@ -40,6 +42,9 @@ passport.use(new LocalStrategy({
 }, (username, password, done) => {
   User.findOne({ where: { email: username } })
   .then(async function (user) {
+    if (!user) {
+      return done(null, false, { message: "Invalid registered email" });
+    }
     const result = await bcrypt.compare(password, user.password);
     if (result) {
       return done(null, user);
@@ -87,7 +92,6 @@ app.get('/', async (req, res)=>{
   }
 });
 
-
 app.get("/todos", connectEnsureLogin.ensureLoggedIn(), async (req, res) => {
   const loggedInUser = req.user.id;
   const allItems = await Todo.getTodos();
@@ -95,7 +99,7 @@ app.get("/todos", connectEnsureLogin.ensureLoggedIn(), async (req, res) => {
   const due_Later = await Todo.dueLater(loggedInUser);
   const due_Today = await Todo.dueToday(loggedInUser);
   const completed_items = await Todo.completed(loggedInUser);
- 
+
   if (req.accepts("html")) {
     res.render("todo", {
       title: "Todo application",
@@ -168,14 +172,28 @@ app.post("/signup", async (req, res) => {
       req.flash("error", "Please provide a valid firstName, email, and password");
       return res.redirect("/signup");
     }
-    req.flash("success", "User signed up successfully");
-    return res.redirect("/todos");
+    const hashedPwd = await bcrypt.hash(password, saltRounds);
+    const user = await User.create({
+      firstName,
+      email,
+      password: hashedPwd,
+    });
+    req.login(user, (err) => {
+      if (err) {
+        console.log(err);
+        req.flash("error", "Login error");
+        return res.redirect("/signup");
+      }
+      req.flash("success", "User signed up and logged in successfully");
+      return res.redirect("/todos");
+    });
   } catch (error) {
     console.error(error);
     req.flash("error", "An error occurred");
     res.redirect("/signup");
   }
 });
+
 app.get("/signup", (req, res) => {
   res.render("signup", { title: "Signup", csrfToken: req.csrfToken() });
 });
@@ -190,6 +208,7 @@ app.put("/todos/:id", async function (req, res) {
     return res.status(422).json(err);
   }
 });
+
 app.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -198,11 +217,11 @@ app.post("/login", async (req, res) => {
       return res.redirect("/login");
     }
     const user = await User.findOne({ where: { email } });
-    if (!user || !user.isValidPassword(password)) {
+    if (!user || !await bcrypt.compare(password, user.password)) {
       req.flash("error", "Invalid email or password");
       return res.redirect("/login");
     }
-  req.flash("success", "Logged in successfully");
+    req.flash("success", "Logged in successfully");
     return res.redirect("/todos");
   } catch (error) {
     console.error(error);
@@ -210,9 +229,11 @@ app.post("/login", async (req, res) => {
     res.redirect("/login");
   }
 });
+
 app.get("/login", (req, res) => {
   res.render("login", { title: "Login", csrfToken: req.csrfToken() });
 });
+
 app.post("/session",
   passport.authenticate("local", {
     failureRedirect: "/login",
@@ -260,12 +281,11 @@ app.post("/users", async (req, res) => {
     req.login(user, (err) => {
       if (err) {
         console.log(err);
-        res.redirect("/")
-        req.flash
+        req.flash("error", "Login error");
+        return res.redirect("/signup");
       }
-    req.flash("success", "User created successfully");
-     return res.redirect("/todos");
-      
+      req.flash("success", "User created successfully");
+      return res.redirect("/todos");
     });
   } catch (err) {
     console.log(err);
@@ -276,18 +296,13 @@ app.post("/users", async (req, res) => {
 
 app.delete("/todos/:id", async (req, res) => {
   console.log("deleting with ID:", req.params.id);
-  const deleteFlag = await Todo.destroy({where: {id: req.params.id, userId:req.user.id,}});
-  if(deleteFlag ===0)
-  {
+  const deleteFlag = await Todo.destroy({where: {id: req.params.id, userId: req.user.id}});
+  if(deleteFlag === 0) {
     return res.send(false);
-  }
-  else{
+  } else {
     req.flash("success", "Todo deleted successfully");
     res.send(true);
   }
 });
-
-
-
 
 module.exports = app;
